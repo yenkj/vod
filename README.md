@@ -1,5 +1,5 @@
 # README
-## 使用代理功能解决moontv跨域问题
+## 使用代理功能解决跨域问题
 - docker-compose.yml
 ```
 version: '3'  
@@ -15,4 +15,4 @@ services:
     network_mode: bridge
 
 ```
-
+## 原始地址.js功能为不代理直接替换，响应稍慢会跨域
