@@ -9,10 +9,11 @@ COPY package*.json ./
 RUN npm install --production  
   
 # 复制源代码  
-COPY vod.js ./  
+COPY index.js ./  
   
 # 暴露端口  
 EXPOSE 3000  
   
 # 启动服务  
 CMD ["node", "vod.js"]
+
