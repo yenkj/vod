@@ -5,10 +5,11 @@
   "main": "index.js",  
   "type": "module",  
   "scripts": {  
-    "start": "node vod.js"  
+    "start": "node index.js"  
   },  
   "dependencies": {  
     "express": "^4.18.2",  
     "undici": "^5.28.0"  
   }  
 }
+
