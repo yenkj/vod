@@ -7,8 +7,9 @@ services:
   vod:  
     build: .  
     ports:  
-      - "3000:3000"  
+      - "4000:3000"  
     volumes:  
       - /volume1/docker/vod/index.js:/app/index.js  
     restart: unless-stoppe
+
 ```
