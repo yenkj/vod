@@ -15,5 +15,6 @@ COPY index.js ./
 EXPOSE 3000  
   
 # 启动服务  
-CMD ["node", "vod.js"]
+CMD ["node", "index.js"]
+
 
