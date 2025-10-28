@@ -393,7 +393,7 @@ async function transformPlayUrl(item) {
         title = size ? `HD高清(${size})` : 'HD高清';    
       }    
       
-      // 使用提取的扩展名而不是硬编码 .mkv    
+      // 使用提取的扩展名  
       const shortUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;    
       allEpisodes.push(`${title}$${shortUrl}`);    
     }    
@@ -412,4 +412,5 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
 
