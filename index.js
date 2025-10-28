@@ -351,30 +351,33 @@ function extractContent(content) {
 async function transformPlayUrl(item) {    
   const playUrl = item.vod_play_url;    
   if (!playUrl) return { url: '', subs: [] };    
-    
+      
   let directoryPath = '';    
   if (item.vod_content) {    
-  const pathMatch = item.vod_content.match(/香蕉:(.+?);/);    
+    const pathMatch = item.vod_content.match(/香蕉:(.+?);/);    
     if (pathMatch) {    
-      directoryPath = pathMatch[1];    
+      directoryPath = pathMatch[1];   
     }    
   }    
-    
+      
   const isTVShow = directoryPath.includes('/电视节目/');    
   const playUrlGroups = playUrl.split('$$$');    
   const allEpisodes = [];    
-    
-  const startTime = Date.now();    
-    
-  // 🔥 关键优化:直接从vod_play_url提取fileId,不调用play API    
+  const startTime = Date.now();
+
+  // 🔥 关键优化:直接从vod_play_url提取fileId,不调用play API        
   for (const urlGroup of playUrlGroups) {    
     const episodes = urlGroup.split('#');    
     for (const episode of episodes) {    
       const parts = episode.split('$');    
       if (parts.length !== 2) continue;    
-    
-      let [title, fileId] = parts; // fileId就是519616-1这样的格式    
-    
+      
+      let [title, fileId] = parts;    // fileId就是519616-1这样的格式    
+          
+      // 提取原始文件扩展名    
+      const extensionMatch = title.match(/\.([a-zA-Z0-9]+)(?:\(|$)/);    
+      const extension = extensionMatch ? extensionMatch[1] : 'mkv';    
+      
       if (isTVShow) {    
         const episodeMatch = title.match(/S(\d+)E(\d+)/i);    
         const sizeMatch = title.match(/\(([^)]+?(?:GB|MB|KB))\)/i);    
@@ -389,23 +392,24 @@ async function transformPlayUrl(item) {
         const size = sizeMatch ? sizeMatch[1] : '';    
         title = size ? `HD高清(${size})` : 'HD高清';    
       }    
-    
-      // 直接构建短链接,假装添加.mkv后缀    
-      const shortUrl = `${API_BASE_URL}/r/${fileId}.mkv`;    
+      
+      // 使用提取的扩展名而不是硬编码 .mkv    
+      const shortUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;    
       allEpisodes.push(`${title}$${shortUrl}`);    
     }    
   }    
-    
+      
   const endTime = Date.now();    
   const totalTime = endTime - startTime;    
-  console.log(`[EPISODES RESOLVED] ${allEpisodes.length} episodes in ${totalTime}ms`);    
-    
+  console.log(` [EPISODES RESOLVED] ${allEpisodes.length} episodes in ${totalTime}ms`);    
+      
   return {    
     url: allEpisodes.join('#'),    
-    subs: [] // 搜索时不返回字幕    
+    subs: []    // 搜索时不返回字幕  
   };    
-}    
+}  
     
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
