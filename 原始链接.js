@@ -352,9 +352,30 @@ async function transformPlayUrl(item) {
   const totalTime = endTime - startTime;      
   console.log(`[EPISODES RESOLVED] ${allEpisodes.length} episodes in ${totalTime}ms`);      
       
-  return {      
-    url: allEpisodes.join('#'),      
-    subs: allSubs      
+  // 替换播放 URL    
+  const urlString = allEpisodes.join('#');    
+  const replacedUrlString = urlString.replace(    
+    /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.YOUR_DOMAIN:5344\/p/g,     
+    ''https://YOUR_DOMAIN:5444/d'    
+  );  
+    
+  // 替换字幕 URL  
+  const replacedSubs = allSubs.map(sub => {  
+    if (sub.url) {  
+      return {  
+        ...sub,  
+        url: sub.url.replace(  
+          /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.YOUR_DOMAIN:5344\/p/g,  
+          'https://YOUR_DOMAIN:5444/d'  
+        )  
+      };  
+    }  
+    return sub;  
+  });  
+        
+  return {          
+    url: replacedUrlString,  
+    subs: replacedSubs  // 使用替换后的字幕数组  
   };      
 }      
       
