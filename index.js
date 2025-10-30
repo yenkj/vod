@@ -248,15 +248,22 @@ async function transformResponse(data) {
       }    
     
       return transformed;    
-    } catch (error) {    
-      console.error(`处理失败: ${item.vod_name}`, error);    
-      return null;    
-    }    
+      } catch (error) {    
+      console.error(`❌ 处理失败: ${item.vod_name}`, error);    
+      // 返回原始数据而不是 null    
+      return {    
+        ...item,    
+        vod_play_from: '默认',    
+        vod_play_url: '',    
+         vod_play_server: 'no',    
+        vod_play_note: '暂无播放源'    
+      };    
+    }     
   }));    
     
-  const transformedList = results    
-    .filter(result => result.status === 'fulfilled' && result.value !== null)    
-    .map(result => result.value);    
+  const transformedList = results      
+    .filter(result => result.status === 'fulfilled')  // 只过滤掉 rejected 的  
+    .map(result => result.value);   
     
   console.log(`📊 [TRANSFORM] 转换结果: ${transformedList.length}/${results.length} 成功`);    
     
@@ -352,6 +359,7 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
 
 
 
