@@ -53,138 +53,70 @@ app.get('/health', (req, res) => {
   });    
 });    
     
-// 🔥 视频代理路由(代理模式,不是重定向)    
-app.get('/r/:fileId', async (req, res) => {    
-  let fileId = req.params.fileId;    
-  fileId = fileId.replace(/\.(m3u8|mkv|mp4|avi|flv|webm|mov)$/i, '');    
+// 视频重定向路由(302模式,不是代理)  
+app.get('/r/:fileId', async (req, res) => {  
+  let fileId = req.params.fileId;  
+  fileId = fileId.replace(/\.(m3u8|mkv|mp4|avi|flv|webm|mov)$/i, '');  
     
-  // 创建AbortController用于清理  
-  const abortController = new AbortController();  
-  let reader = null;  
-    
-  // 监听客户端断开连接  
-  req.on('close', () => {  
-    console.log(`🔌 [PROXY] 客户端断开连接: ${fileId}`);  
-    abortController.abort(); // 取消所有上游请求  
-    if (reader) {  
-      reader.cancel().catch(() => {}); // 取消流读取  
-    }  
-  });  
-      
-  try {    
-    // 1. 检查缓存  
+  try {  
     const cached = urlCache.get(fileId);  
     let playUrl;  
-      
+  
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {  
-      console.log(`💾 [CACHE HIT] ${fileId}`);  
+      console.log(`✅ [CACHE HIT] ${fileId}`);  
       playUrl = cached.url;  
     } else {  
-      // 获取真实URL  
-      const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {    
-        headers: {    
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'    
-        },    
-        signal: abortController.signal,  
+      const playResponse = await fetch(`http://us.199301.xyz:4567/play?id=${fileId}`, {  
+        headers: {  
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'  
+        },  
+        signal: AbortSignal.timeout(10000),  
         dispatcher: agent  
-      });    
-          
-      if (!playResponse.ok) {    
-        console.error(`❌ [PROXY] Play API返回错误: ${playResponse.status}`);    
-        return res.status(404).send('File not found');    
-      }    
-          
-      const playData = await playResponse.json();    
-          
-      if (!playData.url) {    
-        console.error(`❌ [PROXY] Play API未返回URL: ${fileId}`);    
-        return res.status(404).send('URL not found');    
-      }    
-        
+      });  
+  
+      if (!playResponse.ok) {  
+        console.error(`❌ [REDIRECT] Play API返回错误: ${playResponse.status}`);  
+        return res.status(404).send('File not found');  
+      }  
+  
+      const playData = await playResponse.json();  
+      if (!playData.url) {  
+        console.error(`❌ [REDIRECT] Play API未返回URL: ${fileId}`);  
+        return res.status(404).send('URL not found');  
+      }  
+  
       playUrl = playData.url;  
-      // 缓存URL  
       urlCache.set(fileId, { url: playUrl, timestamp: Date.now() });  
-        
-      // 限制缓存大小  
+  
       if (urlCache.size > 1000) {  
         cleanCache();  
       }  
     }  
-        
-    console.log(`🔗 [PROXY] ${fileId} -> ${playUrl.substring(0, 100)}...`);    
-        
-    // 2. 代理视频流  
-    const videoResponse = await fetch(playUrl, {    
-      headers: {    
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',    
-        'Range': req.headers.range || 'bytes=0-',    
-      },  
-      signal: abortController.signal,  
-      dispatcher: agent  
-    });    
-        
-    if (!videoResponse.ok) {    
-      console.error(`❌ [PROXY] 视频获取失败: ${videoResponse.status}`);    
-      return res.status(videoResponse.status).send('Video fetch failed');    
-    }    
-        
-    // 3. 设置CORS头和其他响应头    
-    res.set({    
-      'Access-Control-Allow-Origin': '*',    
-      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',    
-      'Access-Control-Allow-Headers': 'Range, Content-Type',    
-      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',    
-      'Content-Type': videoResponse.headers.get('Content-Type') || 'video/mp4',    
-      'Content-Length': videoResponse.headers.get('Content-Length'),    
-      'Content-Range': videoResponse.headers.get('Content-Range'),    
-      'Accept-Ranges': 'bytes'    
-    });    
-        
-    // 4. 流式传输数据  
-    if (!videoResponse.body) {    
-      return res.status(500).send('No video stream');    
-    }    
-      
-    reader = videoResponse.body.getReader();    
-        
-    try {    
-      while (true) {    
-        const { done, value } = await reader.read();    
-            
-        if (done) {    
-          res.end();    
-          break;    
-        }    
-            
-        // 使用背压控制    
-        if (!res.write(value)) {    
-          await new Promise(resolve => res.once('drain', resolve));    
-        }    
-      }    
-    } catch (error) {    
-      // 忽略客户端断开导致的错误  
-      if (error.name !== 'AbortError') {  
-        console.error(`❌ [PROXY STREAM ERROR] ${fileId}:`, error.message);    
-      }  
-      if (!res.headersSent) {    
-        res.status(500).send('Stream error');    
-      }    
-    } finally {    
-      if (reader) {  
-        reader.releaseLock();    
-      }  
-    }    
-        
-  } catch (error) {    
-    // 忽略客户端断开导致的错误  
-    if (error.name !== 'AbortError') {  
-      console.error(`❌ [PROXY ERROR] ${fileId}:`, error.message);    
+  
+    // 🔑 关键: 替换 5344 为 5444
+    const modifiedUrl = playUrl.replace(  
+      /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.YOUR_DOMAIN:5344\/p/g,  
+      'https://YOUR_DOMAIN:5444/d'  
+    );  
+  
+    console.log(`🔄 [REDIRECT] ${fileId} -> ${modifiedUrl.substring(0, 100)}...`);  
+  
+    // 返回 302 重定向并添加 CORS 头部  
+    res.set({  
+      'Location': modifiedUrl,  
+      'Access-Control-Allow-Origin': '*',  
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',  
+      'Access-Control-Allow-Headers': 'Range, If-Range, Content-Type'  
+    });  
+    res.status(302).end();  
+  
+  } catch (error) {  
+    console.error(`❌ [REDIRECT ERROR] ${fileId}:`, error.message);  
+    if (!res.headersSent) {  
+      return res.status(500).send('Internal server error');  
     }  
-    if (!res.headersSent) {    
-      return res.status(500).send('Internal server error');    
-    }    
-  }    
-});  
+  }  
+});
     
 // 主API端点    
 app.get('/', async (req, res) => {    
@@ -374,9 +306,17 @@ async function transformPlayUrl(item) {
       
       let [title, fileId] = parts;    // fileId就是519616-1这样的格式    
           
-      // 提取原始文件扩展名    
-      const extensionMatch = title.match(/\.([a-zA-Z0-9]+)(?:\(|$)/);    
-      const extension = extensionMatch ? extensionMatch[1] : 'mkv';    
+      // 提取原始文件扩展名并验证  
+      const extensionMatch = title.match(/\.([a-zA-Z0-9]+)(?:\(|$)/);  
+      const validExtensions = ['mkv', 'mp4', 'avi', 'flv', 'webm', 'mov', 'm3u8'];  
+      let extension = 'mkv'; // 默认值  
+  
+      if (extensionMatch) {  
+        const extractedExt = extensionMatch[1].toLowerCase();  
+        if (validExtensions.includes(extractedExt)) {  
+          extension = extractedExt;  
+        }  
+      }    
       
       if (isTVShow) {    
         const episodeMatch = title.match(/S(\d+)E(\d+)/i);    
@@ -412,5 +352,6 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
 
 
