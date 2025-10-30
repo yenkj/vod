@@ -138,80 +138,102 @@ async function transformResponse(data) {
     };      
   }      
       
-  const results = await Promise.allSettled(data.list.map(async (item) => {      
-    console.log(`[PROCESSING] ${item.vod_name} (${item.vod_id})`);      
+const results = await Promise.allSettled(data.list.map(async (item) => {  
+  try {  
+    console.log(`[PROCESSING] ${item.vod_name} (${item.vod_id})`);  
       
-    const transformed = {      
-      vod_id: item.vod_id,      
-      vod_name: item.vod_name,      
-      vod_pic: item.vod_pic,      
-      vod_remarks: item.vod_remarks || '',      
-      vod_year: item.vod_year || '',      
-      vod_area: item.vod_area || '',      
-      vod_lang: item.vod_lang || '',      
-      vod_actor: item.vod_actor || '',      
-      vod_director: item.vod_director || '',      
-      vod_content: extractContent(item.vod_content),      
-      vod_douban_id: item.dbid || item.vod_douban_id || 0,      
-      type_name: item.type_name || ''      
-    };      
+    const transformed = {  
+      vod_id: item.vod_id,  
+      vod_name: item.vod_name,  
+      vod_pic: item.vod_pic,  
+      vod_remarks: item.vod_remarks || '',  
+      vod_year: item.vod_year || '',  
+      vod_area: item.vod_area || '',  
+      vod_lang: item.vod_lang || '',  
+      vod_actor: item.vod_actor || '',  
+      vod_director: item.vod_director || '',  
+      vod_content: extractContent(item.vod_content),  
+      vod_douban_id: item.dbid || item.vod_douban_id || 0,  
+      type_name: item.type_name || ''  
+    };  
       
-    if (item.vod_play_url) {      
-      const playInfo = await transformPlayUrl(item);      
-      transformed.vod_play_from = item.vod_play_from || '默认';      
-      transformed.vod_play_url = playInfo.url;      
-      transformed.vod_play_server = 'no';      
-      transformed.vod_play_note = '';      
-      if (playInfo.subs && playInfo.subs.length > 0) {      
-        transformed.vod_play_subs = playInfo.subs;      
-      }      
-      return transformed;      
-    } else {      
-      const detailResponse = await fetch(      
-        `http://YOUR_DOMAIN:4567/vod1/?ac=videolist&ids=${item.vod_id}`,      
-        {      
-          headers: {      
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'      
-          },      
-          signal: AbortSignal.timeout(10000)    
-        }      
-      );      
+    if (item.vod_play_url) {  
+      const playInfo = await transformPlayUrl(item);  
+      transformed.vod_play_from = item.vod_play_from || '默认';  
+      transformed.vod_play_url = playInfo.url;  
+      transformed.vod_play_server = 'no';  
+      transformed.vod_play_note = '';  
+      if (playInfo.subs && playInfo.subs.length > 0) {  
+        transformed.vod_play_subs = playInfo.subs;  
+      }  
+      return transformed;  
+    } else {  
+      const detailResponse = await fetch(  
+        `http://us.199301.xyz:4567/vod1/?ac=videolist&ids=${item.vod_id}`,  
+        {  
+          headers: {  
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'  
+          },  
+          signal: AbortSignal.timeout(10000)  
+        }  
+      );  
+        
+      if (!detailResponse.ok) {  
+        throw new Error(`详情请求失败: ${item.vod_id}`);  
+      }  
+        
+      const detailData = await detailResponse.json();  
+      if (!detailData.list || detailData.list.length === 0) {  
+        throw new Error(`详情数据为空: ${item.vod_id}`);  
+      }  
+        
+      const detailItem = detailData.list[0];  
+      if (!detailItem.vod_play_url) {  
+        throw new Error(`无播放地址: ${item.vod_id}`);  
+      }  
+        
+      const playInfo = await transformPlayUrl(detailItem);  
+      transformed.vod_play_from = detailItem.vod_play_from || '默认';  
+      transformed.vod_play_url = playInfo.url;  
+      transformed.vod_play_server = 'no';  
+      transformed.vod_play_note = '';  
+        
+      if (playInfo.subs && playInfo.subs.length > 0) {  
+        transformed.vod_play_subs = playInfo.subs;  
+      }  
+        
+      if (!transformed.vod_play_url || transformed.vod_play_url === '') {  
+        throw new Error(`播放地址转换失败: ${item.vod_id}`);  
+      }  
+        
+      return transformed;  
+    }  
+  } catch (error) {  
+    console.error(`❌ 处理失败: ${item.vod_name}`, error);  
+    return {  
+      vod_id: item.vod_id,  
+      vod_name: item.vod_name,  
+      vod_pic: item.vod_pic,  
+      vod_remarks: item.vod_remarks || '',  
+      vod_year: item.vod_year || '',  
+      vod_area: item.vod_area || '',  
+      vod_lang: item.vod_lang || '',  
+      vod_actor: item.vod_actor || '',  
+      vod_director: item.vod_director || '',  
+      vod_content: extractContent(item.vod_content),  
+      vod_douban_id: item.dbid || item.vod_douban_id || 0,  
+      type_name: item.type_name || '',  
+      vod_play_from: '默认',  
+      vod_play_url: '',  
+      vod_play_server: 'no',  
+      vod_play_note: '暂无播放源'  
+    };  
+  }  
+}));  
       
-      if (!detailResponse.ok) {      
-        throw new Error(`详情请求失败: ${item.vod_id}`);      
-      }      
-      
-      const detailData = await detailResponse.json();      
-      if (!detailData.list || detailData.list.length === 0) {      
-        throw new Error(`详情数据为空: ${item.vod_id}`);      
-      }      
-      
-      const detailItem = detailData.list[0];      
-      if (!detailItem.vod_play_url) {      
-        throw new Error(`无播放地址: ${item.vod_id}`);      
-      }      
-      
-      const playInfo = await transformPlayUrl(detailItem);      
-      transformed.vod_play_from = detailItem.vod_play_from || '默认';      
-      transformed.vod_play_url = playInfo.url;      
-      transformed.vod_play_server = 'no';      
-      transformed.vod_play_note = '';      
-      
-      if (playInfo.subs && playInfo.subs.length > 0) {      
-        transformed.vod_play_subs = playInfo.subs;      
-      }      
-      
-      if (!transformed.vod_play_url || transformed.vod_play_url === '') {      
-        throw new Error(`播放地址转换失败: ${item.vod_id}`);      
-      }      
-      
-      return transformed;      
-    }      
-  }));      
-      
-  const transformedList = results      
-    .filter(result => result.status === 'fulfilled')      
-    .map(result => result.value); 
+  const transformedList = results  
+    .filter(result => result.status === 'fulfilled')  
+    .map(result => result.value);
       
  console.log(`📊 [TRANSFORM] 转换结果: ${transformedList.length}/${results.length} 成功`);  
 if (transformedList.length > 0) {  
