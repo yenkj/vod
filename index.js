@@ -611,13 +611,37 @@ async function transformPlayUrl(item) {
       let videoUrl;  
       const needsTranscode = ['mkv', 'avi', 'flv', 'webm', 'mov'].includes(extension.toLowerCase());  
   
-      if (needsTranscode) {  
-        // 需要转码的格式 → 使用 HLS 转码端点  
-        videoUrl = `${API_BASE_URL}/t/${fileId}.m3u8`;  
-      } else {  
-        // MP4、M3U8 等兼容格式 → 使用原有的重定向逻辑  
-        videoUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;  
+if (needsTranscode) {  
+  videoUrl = `${API_BASE_URL}/t/${fileId}.m3u8`;  
+    
+  // 提取内置字幕  
+  try {  
+    const playResponse = await fetch(`http://us.199301.xyz:4567/play?id=${fileId}`, {  
+      headers: { 'User-Agent': 'Mozilla/5.0' },  
+      signal: AbortSignal.timeout(5000),  
+      dispatcher: agent  
+    });  
+      
+    if (playResponse.ok) {  
+      const playData = await playResponse.json();  
+      if (playData.url) {  
+        const originalUrl = playData.url.replace(  
+          /http:\/\/us\.199301\.xyz:5344\/p/g,  
+          'https://us.199301.xyz:5444/d'  
+        );  
+          
+        const subs = await extractSubtitles(originalUrl, fileId);  
+        if (subs.length > 0) {  
+          allSubs.push(...subs);  
+        }  
       }  
+    }  
+  } catch (error) {  
+    console.warn(`⚠️ 字幕提取失败 ${fileId}:`, error.message);  
+  }  
+} else {  
+  videoUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;  
+} 
         
       allEpisodes.push(`${title}$${videoUrl}`);      
     }      
@@ -636,5 +660,6 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
 
 
