@@ -1,20 +1,23 @@
-FROM node:18-alpine  
+FROM node:18-alpine    
   
-WORKDIR /app  
+WORKDIR /app    
   
-# 复制依赖文件  
-COPY package*.json ./  
+# 安装 FFmpeg 及其依赖  
+RUN apk add --no-cache \  
+    ffmpeg \  
+    ffprobe  
   
-# 安装依赖  
-RUN npm install --production  
+# 复制依赖文件    
+COPY package*.json ./    
   
-# 复制源代码  
-COPY index.js ./  
+# 安装依赖    
+RUN npm install --production    
   
-# 暴露端口  
-EXPOSE 3000  
+# 复制源代码    
+COPY index.js ./    
   
-# 启动服务  
+# 暴露端口    
+EXPOSE 3000    
+  
+# 启动服务    
 CMD ["node", "index.js"]
-
-
