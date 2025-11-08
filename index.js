@@ -1,6 +1,11 @@
 import express from "express";    
 import { Agent, setGlobalDispatcher } from "undici";    
-    
+import ffmpeg from "fluent-ffmpeg";
+import { spawn } from "child_process";
+import { promisify } from "util"; 
+import { exec } from "child_process";
+  
+const execAsync = promisify(exec);    
 // 优化连接池配置  
 const agent = new Agent({    
   connections: 30,  // 从100降到30  
@@ -31,7 +36,74 @@ function cleanCache() {
   
 // 每5分钟清理一次过期缓存  
 setInterval(cleanCache, 5 * 60 * 1000);  
-    
+// ✅ 添加编解码器检测函数  
+async function needsTranscoding(videoUrl) {  
+  return new Promise((resolve, reject) => {  
+    ffmpeg.ffprobe(videoUrl, (err, metadata) => {  
+      if (err) {  
+        console.error('❌ [FFprobe] 编解码器检测失败:', err.message);  
+        return reject(err);  
+      }  
+  
+      const videoStream = metadata.streams.find(s => s.codec_type === 'video');  
+      const audioStream = metadata.streams.find(s => s.codec_type === 'audio');  
+  
+      const videoCodec = videoStream?.codec_name?.toLowerCase();  
+      const audioCodec = audioStream?.codec_name?.toLowerCase();  
+  
+      // H.264 的各种别名  
+      const isH264 = videoCodec === 'h264' || videoCodec === 'avc' || videoCodec === 'x264';  
+      // AAC 的各种别名  
+      const isAAC = audioCodec === 'aac' || audioCodec === 'mp4a';  
+  
+      console.log(`📊 [编解码器检测] 视频: ${videoCodec}, 音频: ${audioCodec}`);  
+  
+      resolve({  
+        videoCodec,  
+        audioCodec,  
+        needsVideoTranscode: !isH264,  
+        needsAudioTranscode: !isAAC,  
+        videoStream,  
+        audioStream  
+      });  
+    });  
+  });  
+}  
+  
+// ✅ 添加字幕提取函数  
+async function extractSubtitles(videoUrl, fileId) {  
+  try {  
+    return new Promise((resolve, reject) => {  
+      ffmpeg.ffprobe(videoUrl, (err, metadata) => {  
+        if (err) {  
+          console.error('❌ [字幕检测] 失败:', err.message);  
+          return resolve([]);  
+        }  
+  
+        const subtitleStreams = metadata.streams.filter(s => s.codec_type === 'subtitle');  
+        const subs = [];  
+  
+        for (let i = 0; i < subtitleStreams.length; i++) {  
+          const stream = subtitleStreams[i];  
+          const lang = stream.tags?.language || `track${i}`;  
+          const title = stream.tags?.title || `字幕${i + 1}`;  
+            
+          subs.push({  
+            lang: lang,  
+            ext: 'srt',  
+            url: `${API_BASE_URL}/s/${fileId}.${i}.srt`,  
+            name: title  
+          });  
+        }  
+  
+        resolve(subs);  
+      });  
+    });  
+  } catch (error) {  
+    console.error('❌ [字幕提取] 失败:', error.message);  
+    return [];  
+  }  
+}    
 app.use(express.json());    
     
 app.options('*', (req, res) => {    
@@ -66,7 +138,7 @@ app.get('/r/:fileId', async (req, res) => {
       console.log(`✅ [CACHE HIT] ${fileId}`);  
       playUrl = cached.url;  
     } else {  
-      const playResponse = await fetch(`http://us.199301.xyz:4567/play?id=${fileId}`, {  
+      const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {  
         headers: {  
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'  
         },  
@@ -114,6 +186,171 @@ app.get('/r/:fileId', async (req, res) => {
     console.error(`❌ [REDIRECT ERROR] ${fileId}:`, error.message);  
     if (!res.headersSent) {  
       return res.status(500).send('Internal server error');  
+    }  
+  }  
+});
+
+// ✅ 添加 HLS 转码端点  
+app.get('/t/:fileId.:extension', async (req, res) => {  
+  const { fileId, extension } = req.params;  
+  const audioTrack = parseInt(req.query.audio) || 0;  
+  
+  console.log(`🎬 [HLS转码请求] ${fileId}.${extension}, 音轨: ${audioTrack}`);  
+  
+  try {  
+    // 获取原始视频 URL  
+    const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {  
+      headers: { 'User-Agent': 'Mozilla/5.0' },  
+      signal: AbortSignal.timeout(10000),  
+      dispatcher: agent  
+    });  
+  
+    if (!playResponse.ok) {  
+      return res.status(404).send('视频未找到');  
+    }  
+  
+    const playData = await playResponse.json();  
+    if (!playData.url) {  
+      return res.status(404).send('视频 URL 未找到');  
+    }  
+  
+    const originalUrl = playData.url.replace(  
+      /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.xyz:5344\/p/g,  
+      'https://YOUR_DOMAIN:5444/d'  
+    );  
+  
+    // 🎯 检测编解码器  
+    const codecInfo = await needsTranscoding(originalUrl);  
+      
+    console.log(`🔍 [编解码器决策] 视频: ${codecInfo.needsVideoTranscode ? '转码' : 'copy'}, 音频: ${codecInfo.needsAudioTranscode ? '转码' : 'copy'}`);  
+  
+    // 设置 HLS 响应头  
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');  
+    res.setHeader('Access-Control-Allow-Origin', '*');  
+    res.setHeader('Cache-Control', 'no-cache');  
+  
+    // 🎬 构建 FFmpeg 命令 - 智能选择编解码器  
+    const ffmpegArgs = [  
+      '-i', originalUrl,  
+      '-map', '0:v:0',  
+      '-map', `0:a:${audioTrack}`,  
+    ];  
+  
+    // 视频编解码器选择  
+    if (codecInfo.needsVideoTranscode) {  
+      console.log(`🔄 [视频转码] ${codecInfo.videoCodec} -> H.264`);  
+      ffmpegArgs.push(  
+        '-c:v', 'libx264',  
+        '-preset', 'veryfast',  
+        '-crf', '23'  
+      );  
+    } else {  
+      console.log(`✅ [视频直通] ${codecInfo.videoCodec} (H.264)`);  
+      ffmpegArgs.push('-c:v', 'copy');  
+    }  
+  
+    // 音频编解码器选择  
+    if (codecInfo.needsAudioTranscode) {  
+      console.log(`🔄 [音频转码] ${codecInfo.audioCodec} -> AAC`);  
+      ffmpegArgs.push(  
+        '-c:a', 'aac',  
+        '-b:a', '192k'  
+      );  
+    } else {  
+      console.log(`✅ [音频直通] ${codecInfo.audioCodec} (AAC)`);  
+      ffmpegArgs.push('-c:a', 'copy');  
+    }  
+  
+    // HLS 输出参数  
+    ffmpegArgs.push(  
+      '-f', 'hls',  
+      '-hls_time', '6',  
+      '-hls_list_size', '0',  
+      '-hls_flags', 'delete_segments+append_list',  
+      '-start_number', '0',  
+      'pipe:1'  
+    );  
+  
+    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);  
+  
+    // 将 FFmpeg 输出流式传输到响应  
+    ffmpegProcess.stdout.pipe(res);  
+  
+    ffmpegProcess.stderr.on('data', (data) => {  
+      console.log(`[FFmpeg] ${data.toString().trim()}`);  
+    });  
+  
+    ffmpegProcess.on('error', (error) => {  
+      console.error('❌ [FFmpeg] 进程错误:', error);  
+      if (!res.headersSent) {  
+        res.status(500).send('转码失败');  
+      }  
+    });  
+  
+    ffmpegProcess.on('close', (code) => {  
+      console.log(`✅ [FFmpeg] HLS转码完成, 退出码: ${code}`);  
+    });  
+  
+    // 客户端断开连接时终止 FFmpeg  
+    req.on('close', () => {  
+      if (!ffmpegProcess.killed) {  
+        ffmpegProcess.kill('SIGKILL');  
+        console.log('🛑 [FFmpeg] 客户端断开,终止转码');  
+      }  
+    });  
+  
+  } catch (error) {  
+    console.error(`❌ [HLS转码错误] ${fileId}:`, error.message);  
+    if (!res.headersSent) {  
+      res.status(500).send('转码失败');  
+    }  
+  }  
+});  
+  
+// ✅ 添加字幕提取端点  
+app.get('/s/:fileId.:index.:ext', async (req, res) => {  
+  const { fileId, index, ext } = req.params;  
+  
+  try {  
+    const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {  
+      headers: { 'User-Agent': 'Mozilla/5.0' },  
+      signal: AbortSignal.timeout(10000),  
+      dispatcher: agent  
+    });  
+  
+    if (!playResponse.ok) {  
+      return res.status(404).send('视频未找到');  
+    }  
+  
+    const playData = await playResponse.json();  
+    const originalUrl = playData.url.replace(  
+      /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.xyz:5344\/p/g,  
+      'https://YOUR_DOMAIN:5444/d'  
+    );  
+  
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');  
+    res.setHeader('Access-Control-Allow-Origin', '*');  
+  
+    const ffmpegProcess = spawn('ffmpeg', [  
+      '-i', originalUrl,  
+      '-map', `0:s:${index}`,  
+      '-f', 'srt',  
+      'pipe:1'  
+    ]);  
+  
+    ffmpegProcess.stdout.pipe(res);  
+  
+    ffmpegProcess.on('error', (error) => {  
+      console.error('❌ [字幕提取] 错误:', error);  
+      if (!res.headersSent) {  
+        res.status(500).send('字幕提取失败');  
+      }  
+    });  
+  
+  } catch (error) {  
+    console.error(`❌ [字幕提取错误] ${fileId}:`, error.message);  
+    if (!res.headersSent) {  
+      res.status(500).send('字幕提取失败');  
     }  
   }  
 });
@@ -287,79 +524,85 @@ function extractContent(content) {
   return content;    
 }    
     
-async function transformPlayUrl(item) {    
-  const playUrl = item.vod_play_url;    
-  if (!playUrl) return { url: '', subs: [] };    
-      
-  let directoryPath = '';    
-  if (item.vod_content) {    
-    const pathMatch = item.vod_content.match(/香蕉:(.+?);/);    
-    if (pathMatch) {    
-      directoryPath = pathMatch[1];   
-    }    
-  }    
-      
-  const isTVShow = directoryPath.includes('/电视节目/');    
-  const playUrlGroups = playUrl.split('$$$');    
-  const allEpisodes = [];    
-  const startTime = Date.now();
-
-  // 🔥 关键优化:直接从vod_play_url提取fileId,不调用play API        
-  for (const urlGroup of playUrlGroups) {    
-    const episodes = urlGroup.split('#');    
-    for (const episode of episodes) {    
-      const parts = episode.split('$');    
-      if (parts.length !== 2) continue;    
-      
-      let [title, fileId] = parts;    // fileId就是519616-1这样的格式    
-          
-      // 提取原始文件扩展名并验证  
-      const extensionMatch = title.match(/\.([a-zA-Z0-9]+)(?:\(|$)/);  
-      const validExtensions = ['mkv', 'mp4', 'avi', 'flv', 'webm', 'mov', 'm3u8'];  
-      let extension = 'mkv'; // 默认值  
+async function transformPlayUrl(item) {      
+  const playUrl = item.vod_play_url;      
+  if (!playUrl) return { url: '', subs: [] };      
+        
+  let directoryPath = '';      
+  if (item.vod_content) {      
+    const pathMatch = item.vod_content.match(/香蕉:(.+?);/);      
+    if (pathMatch) {      
+      directoryPath = pathMatch[1];     
+    }      
+  }      
+        
+  const isTVShow = directoryPath.includes('/电视节目/');      
+  const playUrlGroups = playUrl.split('$$$');      
+  const allEpisodes = [];      
+  const allSubs = [];  // 如果需要收集字幕  
+  const startTime = Date.now();  
   
-      if (extensionMatch) {  
-        const extractedExt = extensionMatch[1].toLowerCase();  
-        if (validExtensions.includes(extractedExt)) {  
-          extension = extractedExt;  
-        }  
-      }    
-      
-      if (isTVShow) {    
-        const episodeMatch = title.match(/S(\d+)E(\d+)/i);    
-        const sizeMatch = title.match(/\(([^)]+?(?:GB|MB|KB))\)/i);    
-        if (episodeMatch) {    
-          const season = episodeMatch[1].padStart(2, '0');    
-          const ep = episodeMatch[2].padStart(2, '0');    
-          const size = sizeMatch ? sizeMatch[1] : '';    
-          title = size ? `S${season}E${ep}(${size})` : `S${season}E${ep}`;    
+  for (const urlGroup of playUrlGroups) {      
+    const episodes = urlGroup.split('#');      
+    for (const episode of episodes) {      
+      const parts = episode.split('$');      
+      if (parts.length !== 2) continue;      
+        
+      let [title, fileId] = parts;  
+            
+      // 提取原始文件扩展名并验证    
+      const extensionMatch = title.match(/\.([a-zA-Z0-9]+)(?:\(|$)/);    
+      const validExtensions = ['mkv', 'mp4', 'avi', 'flv', 'webm', 'mov', 'm3u8'];    
+      let extension = 'mkv'; // 默认值    
+    
+      if (extensionMatch) {    
+        const extractedExt = extensionMatch[1].toLowerCase();    
+        if (validExtensions.includes(extractedExt)) {    
+          extension = extractedExt;    
         }    
-      } else {    
-        const sizeMatch = title.match(/\(([^)]+?(?:GB|MB|KB))\)/i);    
-        const size = sizeMatch ? sizeMatch[1] : '';    
-        title = size ? `HD高清(${size})` : 'HD高清';    
-      }    
-      
-      // 使用提取的扩展名  
-      const shortUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;    
-      allEpisodes.push(`${title}$${shortUrl}`);    
-    }    
-  }    
-      
-  const endTime = Date.now();    
-  const totalTime = endTime - startTime;    
-  console.log(` [EPISODES RESOLVED] ${allEpisodes.length} episodes in ${totalTime}ms`);    
-      
-  return {    
-    url: allEpisodes.join('#'),    
-    subs: []    // 搜索时不返回字幕  
-  };    
-}  
+      }      
+        
+      if (isTVShow) {      
+        const episodeMatch = title.match(/S(\d+)E(\d+)/i);      
+        const sizeMatch = title.match(/\(([^)]+?(?:GB|MB|KB))\)/i);      
+        if (episodeMatch) {      
+          const season = episodeMatch[1].padStart(2, '0');      
+          const ep = episodeMatch[2].padStart(2, '0');      
+          const size = sizeMatch ? sizeMatch[1] : '';      
+          title = size ? `S${season}E${ep}(${size})` : `S${season}E${ep}`;      
+        }      
+      } else {      
+        const sizeMatch = title.match(/\(([^)]+?(?:GB|MB|KB))\)/i);      
+        const size = sizeMatch ? sizeMatch[1] : '';      
+        title = size ? `HD高清(${size})` : 'HD高清';      
+      }      
+        
+      // 🎬 智能选择: 需要转码的格式使用 /t 端点,其他使用 /r 重定向  
+      let videoUrl;  
+      const needsTranscode = ['mkv', 'avi', 'flv', 'webm', 'mov'].includes(extension.toLowerCase());  
+  
+      if (needsTranscode) {  
+        // 需要转码的格式 → 使用 HLS 转码端点  
+        videoUrl = `${API_BASE_URL}/t/${fileId}.m3u8`;  
+      } else {  
+        // MP4、M3U8 等兼容格式 → 使用原有的重定向逻辑  
+        videoUrl = `${API_BASE_URL}/r/${fileId}.${extension}`;  
+      }  
+        
+      allEpisodes.push(`${title}$${videoUrl}`);      
+    }      
+  }      
+        
+  const endTime = Date.now();      
+  const totalTime = endTime - startTime;      
+  console.log(`📺 [EPISODES RESOLVED] ${allEpisodes.length} episodes in ${totalTime}ms`);      
+        
+  return {      
+    url: allEpisodes.join('#'),      
+    subs: allSubs  // 如果需要字幕,否则保持 []  
+  };      
+} 
     
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
-
-
-
-
