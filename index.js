@@ -204,7 +204,7 @@ app.get('/t/:fileId.:extension', async (req, res) => {
     
   try {  
     // 获取原始视频 URL  
-    const playResponse = await fetch(`http://us.199301.xyz:4567/play?id=${fileId}`, {  
+    const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {  
       headers: { 'User-Agent': 'Mozilla/5.0' },  
       signal: AbortSignal.timeout(10000),  
       dispatcher: agent  
@@ -220,8 +220,8 @@ app.get('/t/:fileId.:extension', async (req, res) => {
     }  
       
     const originalUrl = playData.url.replace(  
-      /http:\/\/us\.199301\.xyz:5344\/p/g,  
-      'https://us.199301.xyz:5444/d'  
+      /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.xyz:5344\/p/g,  
+      'https://YOUR_DOMAIN.xyz:5444/d'  
     );  
       
     // 🎯 检测编解码器  
@@ -636,4 +636,5 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
 
