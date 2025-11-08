@@ -190,52 +190,57 @@ app.get('/r/:fileId', async (req, res) => {
   }  
 });
 
-// ✅ 添加 HLS 转码端点  
+// ✅ 添加 HLS 转码端点 - 包含超时和错误处理改进  
 app.get('/t/:fileId.:extension', async (req, res) => {  
   const { fileId, extension } = req.params;  
   const audioTrack = parseInt(req.query.audio) || 0;  
-  
+    
   console.log(`🎬 [HLS转码请求] ${fileId}.${extension}, 音轨: ${audioTrack}`);  
-  
+    
+  // 🔧 改进 1: 添加超时机制变量  
+  let lastDataTime = Date.now();  
+  const IDLE_TIMEOUT = 30000; // 30秒无数据传输则终止  
+  let idleCheck = null;  
+    
   try {  
     // 获取原始视频 URL  
-    const playResponse = await fetch(`http://YOUR_DOMAIN:4567/play?id=${fileId}`, {  
+    const playResponse = await fetch(`http://us.199301.xyz:4567/play?id=${fileId}`, {  
       headers: { 'User-Agent': 'Mozilla/5.0' },  
       signal: AbortSignal.timeout(10000),  
       dispatcher: agent  
     });  
-  
+      
     if (!playResponse.ok) {  
       return res.status(404).send('视频未找到');  
     }  
-  
+      
     const playData = await playResponse.json();  
     if (!playData.url) {  
       return res.status(404).send('视频 URL 未找到');  
     }  
-  
+      
     const originalUrl = playData.url.replace(  
-      /http:\/\/YOUR_DOMAIN\.YOUR_DOMAIN\.xyz:5344\/p/g,  
-      'https://YOUR_DOMAIN:5444/d'  
+      /http:\/\/us\.199301\.xyz:5344\/p/g,  
+      'https://us.199301.xyz:5444/d'  
     );  
-  
+      
     // 🎯 检测编解码器  
     const codecInfo = await needsTranscoding(originalUrl);  
       
     console.log(`🔍 [编解码器决策] 视频: ${codecInfo.needsVideoTranscode ? '转码' : 'copy'}, 音频: ${codecInfo.needsAudioTranscode ? '转码' : 'copy'}`);  
-  
+      
     // 设置 HLS 响应头  
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');  
     res.setHeader('Access-Control-Allow-Origin', '*');  
     res.setHeader('Cache-Control', 'no-cache');  
-  
+      
     // 🎬 构建 FFmpeg 命令 - 智能选择编解码器  
     const ffmpegArgs = [  
       '-i', originalUrl,  
       '-map', '0:v:0',  
       '-map', `0:a:${audioTrack}`,  
     ];  
-  
+      
     // 视频编解码器选择  
     if (codecInfo.needsVideoTranscode) {  
       console.log(`🔄 [视频转码] ${codecInfo.videoCodec} -> H.264`);  
@@ -248,7 +253,7 @@ app.get('/t/:fileId.:extension', async (req, res) => {
       console.log(`✅ [视频直通] ${codecInfo.videoCodec} (H.264)`);  
       ffmpegArgs.push('-c:v', 'copy');  
     }  
-  
+      
     // 音频编解码器选择  
     if (codecInfo.needsAudioTranscode) {  
       console.log(`🔄 [音频转码] ${codecInfo.audioCodec} -> AAC`);  
@@ -260,7 +265,7 @@ app.get('/t/:fileId.:extension', async (req, res) => {
       console.log(`✅ [音频直通] ${codecInfo.audioCodec} (AAC)`);  
       ffmpegArgs.push('-c:a', 'copy');  
     }  
-  
+      
     // HLS 输出参数  
     ffmpegArgs.push(  
       '-f', 'hls',  
@@ -270,42 +275,67 @@ app.get('/t/:fileId.:extension', async (req, res) => {
       '-start_number', '0',  
       'pipe:1'  
     );  
-  
+      
     const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);  
-  
+      
+    // 🔧 改进 1: 启动超时检查定时器  
+    idleCheck = setInterval(() => {  
+      if (Date.now() - lastDataTime > IDLE_TIMEOUT) {  
+        console.log('⏱️ [FFmpeg] 超时无数据传输,终止转码');  
+        if (!ffmpegProcess.killed) {  
+          ffmpegProcess.kill('SIGKILL');  
+        }  
+        clearInterval(idleCheck);  
+      }  
+    }, 5000);  
+      
+    // 🔧 改进 1: 监听数据传输,更新最后数据时间  
+    ffmpegProcess.stdout.on('data', (chunk) => {  
+      lastDataTime = Date.now();  
+      // 继续传输数据到响应  
+    });  
+      
     // 将 FFmpeg 输出流式传输到响应  
     ffmpegProcess.stdout.pipe(res);  
-  
+      
     ffmpegProcess.stderr.on('data', (data) => {  
       console.log(`[FFmpeg] ${data.toString().trim()}`);  
     });  
-  
+      
+    // 🔧 改进 2: 完善错误处理  
     ffmpegProcess.on('error', (error) => {  
       console.error('❌ [FFmpeg] 进程错误:', error);  
+      clearInterval(idleCheck); // 清理定时器  
       if (!res.headersSent) {  
         res.status(500).send('转码失败');  
       }  
     });  
-  
+      
+    // 🔧 改进 2: 完善关闭处理  
     ffmpegProcess.on('close', (code) => {  
       console.log(`✅ [FFmpeg] HLS转码完成, 退出码: ${code}`);  
+      clearInterval(idleCheck); // 清理定时器  
     });  
-  
+      
     // 客户端断开连接时终止 FFmpeg  
     req.on('close', () => {  
+      clearInterval(idleCheck); // 清理定时器  
       if (!ffmpegProcess.killed) {  
         ffmpegProcess.kill('SIGKILL');  
         console.log('🛑 [FFmpeg] 客户端断开,终止转码');  
       }  
     });  
-  
+      
   } catch (error) {  
     console.error(`❌ [HLS转码错误] ${fileId}:`, error.message);  
+    if (idleCheck) {  
+      clearInterval(idleCheck); // 确保清理定时器  
+    }  
     if (!res.headersSent) {  
       res.status(500).send('转码失败');  
     }  
   }  
-});  
+});
   
 // ✅ 添加字幕提取端点  
 app.get('/s/:fileId.:index.:ext', async (req, res) => {  
@@ -606,3 +636,4 @@ async function transformPlayUrl(item) {
 app.listen(PORT, () => {    
   console.log(`Server is running on http://localhost:${PORT}`);    
 });
+
