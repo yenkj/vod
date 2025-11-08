@@ -2,10 +2,8 @@ FROM node:18-alpine
   
 WORKDIR /app    
   
-# 安装 FFmpeg 及其依赖  
-RUN apk add --no-cache \  
-    ffmpeg \  
-    ffprobe  
+# 安装 FFmpeg
+RUN apk add --no-cache ffmpeg  
   
 # 复制依赖文件    
 COPY package*.json ./    
