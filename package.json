@@ -1,15 +1,15 @@
-{  
-  "name": "vod",  
-  "version": "1.0.0",  
-  "description": "批量播放地址聚合服务",  
-  "main": "index.js",  
-  "type": "module",  
-  "scripts": {  
-    "start": "node index.js"  
-  },  
-  "dependencies": {  
-    "express": "^4.18.2",  
-    "undici": "^5.28.0"  
-  }  
+{    
+  "name": "vod",    
+  "version": "1.0.0",    
+  "description": "批量播放地址聚合服务",    
+  "main": "index.js",    
+  "type": "module",    
+  "scripts": {    
+    "start": "node index.js"    
+  },    
+  "dependencies": {    
+    "express": "^4.18.2",    
+    "undici": "^5.28.0",  
+    "fluent-ffmpeg": "^2.1.2"  
+  }    
 }
-
